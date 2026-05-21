@@ -14,8 +14,11 @@ Run:   python app.py      then open  http://127.0.0.1:5000
 import csv
 import io
 import json
+import os
+import sys
 import threading
 import time
+import webbrowser
 from datetime import datetime
 
 from flask import Flask, Response, jsonify, render_template, request
@@ -23,7 +26,16 @@ from flask import Flask, Response, jsonify, render_template, request
 import nodriver as uc
 from cb_scraper import CrunchbaseScraper
 
-app = Flask(__name__)
+
+def _resource_dir():
+    """Where bundled resources (templates) live - the PyInstaller extraction
+    dir when frozen, otherwise this file's folder."""
+    if getattr(sys, "frozen", False):
+        return getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+app = Flask(__name__, template_folder=os.path.join(_resource_dir(), "templates"))
 
 # --------------------------------------------------------------------------
 # shared run state - mutated only by the worker thread, read by Flask
@@ -280,6 +292,27 @@ def export_people_csv():
     )
 
 
+def _open_browser_when_ready():
+    """Open the UI in the default browser once the server is up."""
+    import urllib.request
+    for _ in range(40):
+        time.sleep(0.4)
+        try:
+            urllib.request.urlopen("http://127.0.0.1:5000/", timeout=1)
+            break
+        except Exception:
+            continue
+    try:
+        webbrowser.open("http://127.0.0.1:5000")
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    print("\n  Crunchbase Scraper  ->  http://127.0.0.1:5000\n")
+    print("\n" + "=" * 56)
+    print("  Crunchbase Scraper is running.")
+    print("  Open this in your browser:  http://127.0.0.1:5000")
+    print("  Keep this window open while you work. Close it to stop.")
+    print("=" * 56 + "\n")
+    threading.Thread(target=_open_browser_when_ready, daemon=True).start()
     app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)

@@ -1,0 +1,49 @@
+============================================================
+  CRUNCHBASE SCRAPER  -  How to use
+============================================================
+
+REQUIREMENT
+-----------
+Google Chrome must be installed on this PC. That is the only
+requirement - nothing else to install.
+
+
+HOW TO RUN
+----------
+1. Double-click   CrunchbaseScraper.exe
+
+2. A black window opens and stays open. THAT WINDOW IS THE
+   PROGRAM - do not close it while you are working.
+
+3. Your web browser opens automatically at:
+        http://127.0.0.1:5000
+   (If it does not open, type that address into your browser.)
+
+4. Paste the domains you were assigned (one per line), or
+   upload your .txt / .csv file.
+
+5. Click "Start scraping".
+
+6. A Chrome window opens and clears the security check by
+   itself. Leave it alone - do not close it.
+
+7. Watch the progress table. When finished, click
+   "Companies CSV" / "People CSV" to download your results.
+
+8. To stop the program, close the black window.
+
+
+GOOD TO KNOW
+------------
+- First launch can take 10-20 seconds. Be patient.
+- Windows SmartScreen / antivirus may warn about an unknown
+  app. Choose "More info" -> "Run anyway" (or "Keep").
+- Work in batches - do not paste thousands of domains at
+  once. Crunchbase limits how fast anyone can pull data.
+- If many domains start failing, wait a few minutes and
+  resume; the program also pauses and recovers on its own.
+- A ".browser_profile" folder will appear next to the .exe
+  on first run. That is normal - it is the program's working
+  data. Leave it.
+
+============================================================

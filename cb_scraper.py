@@ -30,6 +30,7 @@ import asyncio
 import os
 import random
 import re
+import sys
 import time
 from urllib.parse import quote_plus
 
@@ -53,8 +54,15 @@ BLOCK_COOLDOWN = 120             # seconds to wait out a block streak
 # it means later pages load instantly instead of re-challenging. Cookies are
 # only cleared as part of block-streak recovery (a fresh start).
 
-PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           ".browser_profile")
+def _app_dir():
+    """Folder to keep runtime data in - works whether run as a .py or a
+    PyInstaller-frozen .exe (in which case it's the folder next to the exe)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+PROFILE_DIR = os.path.join(_app_dir(), ".browser_profile")
 
 _CHALLENGE_MARKERS = (
     "Just a moment", "Verifying you are human", "challenge-platform",
