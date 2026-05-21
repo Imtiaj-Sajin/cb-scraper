@@ -1,0 +1,35 @@
+# --- browser profile (large, machine-specific, holds cookies) ---
+.browser_profile/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.Python
+
+# --- scraper output / exports ---
+data/*
+!data/.gitkeep
+*.csv
+*.json
+crunchbase*.csv
+crunchbase*.json
+
+# --- local dev / test artifacts ---
+_test_*
+_org_data.json
+_test_page.html
+
+# --- editor / OS / tooling ---
+.vscode/
+.idea/
+.claude/settings.local.json
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- logs ---
+*.log
