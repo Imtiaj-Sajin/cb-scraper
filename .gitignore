@@ -1,6 +1,13 @@
 # --- browser profile (large, machine-specific, holds cookies) ---
 .browser_profile/
 
+# --- built version folders + PyInstaller scratch (large, regenerated) ---
+_v*/
+CrunchbaseScraper/
+build/
+dist/
+*.spec
+
 # --- Python ---
 __pycache__/
 *.py[cod]
