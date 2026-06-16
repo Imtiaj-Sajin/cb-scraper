@@ -335,18 +335,24 @@ def export_people_csv():
     )
 
 
+# Port is fixed at 5000 by default, but can be overridden (e.g. if something
+# else is squatting on 5000) via the CBS_PORT environment variable.
+PORT = int(os.environ.get("CBS_PORT") or 5000)
+
+
 def _open_browser_when_ready():
     """Open the UI in the default browser once the server is up."""
     import urllib.request
+    url = f"http://127.0.0.1:{PORT}/"
     for _ in range(40):
         time.sleep(0.4)
         try:
-            urllib.request.urlopen("http://127.0.0.1:5000/", timeout=1)
+            urllib.request.urlopen(url, timeout=1)
             break
         except Exception:
             continue
     try:
-        webbrowser.open("http://127.0.0.1:5000")
+        webbrowser.open(url)
     except Exception:
         pass
 
@@ -354,8 +360,12 @@ def _open_browser_when_ready():
 if __name__ == "__main__":
     print("\n" + "=" * 56)
     print("  Crunchbase Scraper is running.")
-    print("  Open this in your browser:  http://127.0.0.1:5000")
+    print(f"  Open this in your browser:  http://127.0.0.1:{PORT}")
     print("  Keep this window open while you work. Close it to stop.")
     print("=" * 56 + "\n")
     threading.Thread(target=_open_browser_when_ready, daemon=True).start()
-    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+    # threaded=True: the default single-threaded dev server lets one browser's
+    # keep-alive connection block all other requests (status polling, exports,
+    # a second tab) - which manifests as the whole UI hanging. Threading fixes it.
+    app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False,
+            threaded=True)
