@@ -16,7 +16,8 @@ Strategy (decided after reverse-engineering Crunchbase in May 2026):
     richer than the rendered page.
 
   * Domain -> Crunchbase slug resolution: try a direct slug guess first (cheap),
-    then fall back to a Bing search, then Google. Bing rarely blocks bots.
+    then fall back to a Google search, then Bing. Google resolves the right org
+    page more often, so trying it first usually avoids the second search.
 
   * Anti-block hygiene: one warm browser profile reused across the whole run,
     randomised human-like delays, periodic cookie/site-data clearing, and a
@@ -275,22 +276,35 @@ class CrunchbaseScraper:
     # --- login (phase 2) ---------------------------------------------------
 
     @staticmethod
-    def _looks_logged_in(html):
+    def _looks_logged_in(html, email=None):
         if not html:
             return False
-        if any(m in html for m in _LOGGED_IN_MARKERS):
+        # the strongest signal: the account's own email is embedded in the page
+        if email and email.lower() in html.lower():
             return True
-        return False
+        return any(m in html for m in _LOGGED_IN_MARKERS)
+
+    async def _press_enter(self, tab):
+        """Dispatch an Enter keypress to whatever element currently has focus."""
+        from nodriver import cdp
+        for ev in ("keyDown", "keyUp"):
+            await tab.send(cdp.input_.dispatch_key_event(
+                ev, key="Enter", code="Enter",
+                windows_virtual_key_code=13, native_virtual_key_code=13))
 
     async def ensure_logged_in(self, email=None, password=None):
         """
-        Make sure the browser session is authenticated.
+        Make sure the browser session is authenticated - FULLY automatic when
+        credentials are supplied (no human click needed).
 
-        Strategy: the persistent profile usually already holds the session, so
-        we first just load Crunchbase and check. If not logged in and creds are
-        available, attempt a scripted login. If that can't be confirmed, we
-        leave the Chrome window on the login page so YOU can finish it manually
-        (handles 2FA / captcha / CB UI changes) - cookies then persist.
+        Order:
+          1. Reuse the warm profile if it is already signed in.
+          2. Otherwise open /login, type the email + password, and submit by
+             pressing Enter in the password field. A "Sign In" button click is
+             kept only as a fallback if Enter doesn't take.
+          3. Only when no credentials are given (or scripted login can't be
+             confirmed) do we leave the Chrome window for a manual sign-in;
+             the session then persists for next time.
 
         Returns True if we believe the session is authenticated.
         """
@@ -301,27 +315,28 @@ class CrunchbaseScraper:
         # 1) already logged in via the warm profile?
         try:
             html = await self.fetch(CB_BASE, expect=None)
-            if self._looks_logged_in(html):
+            if self._looks_logged_in(html, email):
                 self.logged_in = True
                 self.log("Logged-in session detected (persistent profile).")
                 return True
         except Exception as e:
             self.log(f"  (login pre-check failed: {e})")
 
-        self.log("No active session. Opening login page...")
-        try:
-            await self.fetch(CB_LOGIN_URL, expect=None)
-        except Exception as e:
-            self.log(f"  could not open login page: {e}")
-
+        # 2) no creds -> manual sign-in path
         if not (email and password):
-            self.log("No credentials given - please log in manually in the "
-                     "Chrome window. The session will persist for next time.")
+            self.log("No credentials given - opening login page; sign in "
+                     "manually in the Chrome window (the session persists).")
+            try:
+                await self.fetch(CB_LOGIN_URL, expect=None)
+            except Exception as e:
+                self.log(f"  could not open login page: {e}")
             return False
 
-        # 2) scripted fill (selectors as of 2026-06; adjust if CB changes them)
+        # 3) scripted auto-login (selectors as of 2026-06)
+        self.log(f"Auto-logging in as {email} ...")
         tab = self.browser.main_tab
         try:
+            await self.fetch(CB_LOGIN_URL, expect=None)
             await asyncio.sleep(2.0)
             email_el = await tab.select("input[name=email], input[type=email]")
             await email_el.send_keys(email)
@@ -329,23 +344,37 @@ class CrunchbaseScraper:
             pass_el = await tab.select("input[name=password], input[type=password]")
             await pass_el.send_keys(password)
             await asyncio.sleep(0.4)
-            try:
-                btn = await tab.find("Sign In", best_match=True)
-            except Exception:
-                btn = await tab.select("button[type=submit]")
-            await btn.click()
-            self.log("  submitted login form; waiting for session...")
-            await asyncio.sleep(7.0)
+
+            # submit by pressing Enter in the password field
+            await self._press_enter(tab)
+            self.log("  submitted login (Enter); waiting for session...")
+            await asyncio.sleep(6.0)
+
+            # fallback: if Enter didn't navigate, click the Sign In button
             html = await tab.get_content()
-            self.logged_in = self._looks_logged_in(html)
+            if not self._looks_logged_in(html, email):
+                try:
+                    btn = await tab.find("Sign In", best_match=True)
+                    await btn.click()
+                    self.log("  Enter didn't take; clicked Sign In, waiting...")
+                    await asyncio.sleep(6.0)
+                except Exception:
+                    pass
+
+            # confirm against a normal page (login often redirects elsewhere)
+            try:
+                html = await self.fetch(CB_BASE, expect=None)
+            except Exception:
+                html = await tab.get_content()
+            self.logged_in = self._looks_logged_in(html, email)
         except Exception as e:
             self.log(f"  scripted login failed ({e}); finish it manually "
                      f"in the Chrome window.")
             self.logged_in = False
 
-        self.log("Login confirmed." if self.logged_in
+        self.log("Login confirmed - session ready." if self.logged_in
                  else "Login NOT confirmed - complete it in the browser window, "
-                      "then start the run.")
+                      "then start the run again.")
         return self.logged_in
 
     def _dump_diagnostics(self, slug, html):
@@ -473,11 +502,16 @@ class CrunchbaseScraper:
         return out
 
     async def _search_engine_slug(self, domain):
-        """Ask Bing (then Google) which Crunchbase org page matches a domain."""
+        """Ask Google (then Bing) which Crunchbase org page matches a domain.
+
+        Google resolves the right org page more often, so we try it first and
+        only fall back to Bing when Google returns nothing - usually saving the
+        second search entirely.
+        """
         query = f'"{domain}" crunchbase'
         engines = [
-            ("Bing", f"https://www.bing.com/search?q={quote_plus(query)}"),
             ("Google", f"https://www.google.com/search?q={quote_plus(query)}"),
+            ("Bing", f"https://www.bing.com/search?q={quote_plus(query)}"),
         ]
         for name, url in engines:
             try:
