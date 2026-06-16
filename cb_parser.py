@@ -154,6 +154,52 @@ def domain_of(url):
     return host[4:] if host.startswith("www.") else host
 
 
+def _money(node):
+    """
+    Format a Crunchbase money field as a human string, or None if absent.
+    CB money looks like {'value': 1000000, 'value_usd': 1000000, 'currency': 'USD'}.
+    Logged-out pages omit these entirely (that's the "Locked" case).
+    """
+    # NB: do NOT _val() this - CB money dicts carry a "value" key, so _val would
+    # strip the currency and silently mislabel everything as USD.
+    if node in (None, "", [], {}):
+        return None
+    if isinstance(node, dict):
+        usd = node.get("value_usd")
+        if usd is not None:                       # USD-normalised amount
+            amt, cur = usd, "USD"
+        else:
+            amt, cur = node.get("value"), node.get("currency") or ""
+        if amt is None:
+            return None
+        try:
+            amt_s = f"{float(amt):,.0f}"
+        except (TypeError, ValueError):
+            return str(amt)
+        return f"${amt_s}" if cur in ("USD", "") else f"{cur} {amt_s}"
+    if isinstance(node, (int, float)):
+        return f"${node:,.0f}"
+    return str(node)
+
+
+def funding_debug(html):
+    """
+    Diagnostic helper: return all card keys plus every funding/financials card
+    raw, so we can see exactly what a LOGGED-IN page exposes that an anonymous
+    one does not. Run once with a logged-in session, inspect the dump.
+    """
+    entity = get_org_entity(html) or {}
+    cards = entity.get("cards", {}) or {}
+    props = entity.get("properties", {}) or {}
+    out = {"all_card_keys": sorted(cards.keys()),
+           "property_keys": sorted(props.keys())}
+    for k, v in cards.items():
+        kl = k.lower()
+        if "fund" in kl or "financ" in kl or "invest" in kl:
+            out[f"card::{k}"] = v
+    return out
+
+
 # --- organization parsing ---------------------------------------------------
 
 def parse_organization(html):
@@ -236,9 +282,22 @@ def parse_organization(html):
             break
 
     # --- funding ------------------------------------------------------------
-    # Funding TOTAL is locked behind login - we only get is_present:true.
-    # Round counts / investor counts ARE public, so we surface those.
-    rec["funding_total"] = "Locked (login required)"
+    # Funding TOTAL is omitted from the page for logged-out visitors (we only
+    # get is_present:true). With a logged-in session the real amount IS present
+    # in funding_rounds_summary / financials, so we parse it; otherwise we fall
+    # back to the "Locked" marker. Round/investor counts are public either way.
+    rec["funding_total"] = (
+        _money(funding_sum.get("funding_total"))
+        or _money(financials.get("funding_total"))
+        or _money(funding_sum.get("funding_total_usd"))
+        or "Locked (login required)"
+    )
+    rec["last_funding_amount"] = (
+        _money(funding_sum.get("last_funding_total"))
+        or _money(financials.get("last_funding_total"))
+    )
+    rec["last_funding_date"] = (funding_sum.get("last_funding_at")
+                                or about.get("last_funding_at"))
     rec["num_funding_rounds"] = (financials.get("num_funding_rounds")
                                  or funding_sum.get("num_funding_rounds"))
     rec["num_investors"] = financials.get("num_investors")

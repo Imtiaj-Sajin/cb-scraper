@@ -32,7 +32,7 @@ import random
 import re
 import sys
 import time
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import nodriver as uc
 
@@ -48,6 +48,40 @@ CF_CLICK_ATTEMPTS = 4            # times to actively click the CF checkbox
 MIN_DELAY, MAX_DELAY = 5.0, 11.0 # polite random gap between organizations
 RESTART_AFTER_BLOCKS = 2         # consecutive blocks -> cooldown + restart
 BLOCK_COOLDOWN = 120             # seconds to wait out a block streak
+
+# --------------------------------------------------------------------------
+# Phase 2: logged-in session
+# --------------------------------------------------------------------------
+CB_BASE = "https://www.crunchbase.com"
+CB_LOGIN_URL = "https://www.crunchbase.com/login"
+
+# Telemetry / usage-counter endpoints to block. KEY INSIGHT: every field we
+# collect is server-rendered into ng-state in the FIRST document response, so
+# blocking these *later* calls removes ZERO data - it only stops the request
+# that charges a profile view against a free account's daily quota. The generic
+# analytics patterns below are safe to block always. Crunchbase's own usage
+# counter is account/version-specific: run with diagnostic=True, watch the
+# logged request list for the call that fires right as the page settles, then
+# add its URL pattern here.
+DEFAULT_BLOCKED_URLS = [
+    "*google-analytics.com*", "*googletagmanager.com*", "*analytics.google.com*",
+    "*segment.io*", "*segment.com*", "*cdn.segment.com*",
+    "*heapanalytics.com*", "*heap.io*", "*mixpanel.com*", "*amplitude.com*",
+    "*doubleclick.net*", "*facebook.net*", "*facebook.com/tr*",
+    "*hotjar.com*", "*hotjar.io*", "*fullstory.com*", "*clarity.ms*",
+    "*cdn.cookielaw.org*", "*bombora*", "*6sense*", "*qualified.com*",
+    "*munchkin.marketo*", "*bizible*", "*pendo.io*",
+    # --- Crunchbase's own view counter (confirm via diagnostic, then enable) ---
+    # "*/v4/data/searches/*",
+    # "*field_aggregates*",
+    # "*/v4/md/*",
+]
+
+# Markers that a page is being viewed by a logged-IN user (best-effort; CB
+# changes these, so we check several).
+_LOGGED_IN_MARKERS = ('"is_logged_in":true', '"isLoggedIn":true', '/logout',
+                      'data-cy="account-menu"', 'Sign out', 'My Profile')
+_LOGGED_OUT_MARKERS = ('Sign in to continue', 'href="/login"', 'Log In to')
 
 # NOTE on cookies: we deliberately do NOT wipe cookies mid-run. The Cloudflare
 # `cf_clearance` cookie is what proves we already passed a challenge - keeping
@@ -113,11 +147,21 @@ def _parse_proxy(proxy):
 class CrunchbaseScraper:
     """Owns one Chrome instance and knows how to pull Crunchbase data."""
 
-    def __init__(self, log=print, proxy=None):
+    def __init__(self, log=print, proxy=None, email=None, password=None,
+                 blocked_urls=None, diagnostic=False):
         self.browser = None
         self.log = log
         self.proxy = proxy or None        # 'host:port' or 'http://user:pass@host:port'
         self._block_streak = 0
+        # phase 2
+        self.email = email or None
+        self.password = password or None
+        self.blocked_urls = (list(DEFAULT_BLOCKED_URLS)
+                             if blocked_urls is None else list(blocked_urls))
+        self.diagnostic = diagnostic
+        self.logged_in = False
+        self._req_log = []                # request URLs seen during last nav
+        self._net_installed = False
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -140,7 +184,47 @@ class CrunchbaseScraper:
         )
         if server and user:
             await self._install_proxy_auth(user, pw)
+        await self._install_network_controls()
         self.log("Browser ready.")
+
+    async def _install_network_controls(self):
+        """
+        Enable CDP networking so we can (a) record every request URL during a
+        navigation (diagnostic / beacon-hunting) and (b) block telemetry +
+        usage-counter URLs so a view is not charged against the account quota.
+        """
+        try:
+            from nodriver import cdp
+        except Exception as e:
+            self.log(f"(network controls unavailable: {e})")
+            return
+        tab = self.browser.main_tab
+        try:
+            await tab.send(cdp.network.enable())
+            if self.blocked_urls:
+                # nodriver snake-cases "setBlockedURLs" oddly and the exact name
+                # has shifted across versions - resolve it defensively.
+                block_fn = (getattr(cdp.network, "set_blocked_ur_ls", None)
+                            or getattr(cdp.network, "set_blocked_urls", None)
+                            or getattr(cdp.network, "set_blocked_ur_l_s", None))
+                if block_fn:
+                    await tab.send(block_fn(urls=self.blocked_urls))
+                    self.log(f"Blocking {len(self.blocked_urls)} telemetry/"
+                             f"counter URL pattern(s).")
+                else:
+                    self.log("(setBlockedURLs not found in this nodriver build; "
+                             "telemetry not blocked)")
+
+            def _on_req(ev):
+                try:
+                    self._req_log.append(ev.request.url)
+                except Exception:
+                    pass
+
+            tab.add_handler(cdp.network.RequestWillBeSent, _on_req)
+            self._net_installed = True
+        except Exception as e:
+            self.log(f"(could not install network controls: {e})")
 
     async def _install_proxy_auth(self, user, pw):
         """Answer the proxy's Basic-auth challenge over CDP (per main tab)."""
@@ -188,10 +272,108 @@ class CrunchbaseScraper:
         except Exception as e:
             self.log(f"(cookie clear skipped: {e})")
 
+    # --- login (phase 2) ---------------------------------------------------
+
+    @staticmethod
+    def _looks_logged_in(html):
+        if not html:
+            return False
+        if any(m in html for m in _LOGGED_IN_MARKERS):
+            return True
+        return False
+
+    async def ensure_logged_in(self, email=None, password=None):
+        """
+        Make sure the browser session is authenticated.
+
+        Strategy: the persistent profile usually already holds the session, so
+        we first just load Crunchbase and check. If not logged in and creds are
+        available, attempt a scripted login. If that can't be confirmed, we
+        leave the Chrome window on the login page so YOU can finish it manually
+        (handles 2FA / captcha / CB UI changes) - cookies then persist.
+
+        Returns True if we believe the session is authenticated.
+        """
+        email = email or self.email
+        password = password or self.password
+        await self.start()
+
+        # 1) already logged in via the warm profile?
+        try:
+            html = await self.fetch(CB_BASE, expect=None)
+            if self._looks_logged_in(html):
+                self.logged_in = True
+                self.log("Logged-in session detected (persistent profile).")
+                return True
+        except Exception as e:
+            self.log(f"  (login pre-check failed: {e})")
+
+        self.log("No active session. Opening login page...")
+        try:
+            await self.fetch(CB_LOGIN_URL, expect=None)
+        except Exception as e:
+            self.log(f"  could not open login page: {e}")
+
+        if not (email and password):
+            self.log("No credentials given - please log in manually in the "
+                     "Chrome window. The session will persist for next time.")
+            return False
+
+        # 2) scripted fill (selectors as of 2026-06; adjust if CB changes them)
+        tab = self.browser.main_tab
+        try:
+            await asyncio.sleep(2.0)
+            email_el = await tab.select("input[name=email], input[type=email]")
+            await email_el.send_keys(email)
+            await asyncio.sleep(0.4)
+            pass_el = await tab.select("input[name=password], input[type=password]")
+            await pass_el.send_keys(password)
+            await asyncio.sleep(0.4)
+            try:
+                btn = await tab.find("Sign In", best_match=True)
+            except Exception:
+                btn = await tab.select("button[type=submit]")
+            await btn.click()
+            self.log("  submitted login form; waiting for session...")
+            await asyncio.sleep(7.0)
+            html = await tab.get_content()
+            self.logged_in = self._looks_logged_in(html)
+        except Exception as e:
+            self.log(f"  scripted login failed ({e}); finish it manually "
+                     f"in the Chrome window.")
+            self.logged_in = False
+
+        self.log("Login confirmed." if self.logged_in
+                 else "Login NOT confirmed - complete it in the browser window, "
+                      "then start the run.")
+        return self.logged_in
+
+    def _dump_diagnostics(self, slug, html):
+        """Write request log + funding ng-state keys for one org to data/."""
+        try:
+            import json
+            out_dir = os.path.join(_app_dir(), "data")
+            os.makedirs(out_dir, exist_ok=True)
+            safe = re.sub(r"[^a-z0-9_-]", "_", (slug or "page").lower())[:60]
+            payload = {
+                "slug": slug,
+                "logged_in": self.logged_in,
+                "requests_during_load": list(self._req_log),
+                "funding_state": cb_parser.funding_debug(html),
+            }
+            path = os.path.join(out_dir, f"diag_{safe}.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2, ensure_ascii=False, default=str)
+            self.log(f"  [diagnostic] wrote {path} "
+                     f"({len(self._req_log)} requests captured)")
+        except Exception as e:
+            self.log(f"  [diagnostic] dump failed: {e}")
+
     # --- low-level fetch ---------------------------------------------------
 
     async def _navigate(self, url, expect):
         """One navigation attempt. Returns HTML, or raises (block / conn loss)."""
+        self._req_log = []               # fresh request capture for this nav
         tab = await asyncio.wait_for(self.browser.get(url), timeout=NAV_TIMEOUT)
 
         deadline = time.time() + CHALLENGE_TIMEOUT
@@ -394,6 +576,10 @@ class CrunchbaseScraper:
             if not record:
                 return {"status": "error", "record": None,
                         "error": "Found page but could not parse data"}
+
+            if self.diagnostic:
+                self._dump_diagnostics(record.get("crunchbase_permalink")
+                                       or permalink, html)
 
             record["input_domain"] = domain
             if enrich and record.get("key_people"):

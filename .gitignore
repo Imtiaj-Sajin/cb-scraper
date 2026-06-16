@@ -3,10 +3,12 @@
 
 # --- built version folders + PyInstaller scratch (large, regenerated) ---
 _v*/
+crunchbase_scraper_v*/
 CrunchbaseScraper/
 build/
 dist/
 *.spec
+*.zip
 
 # --- Python ---
 __pycache__/

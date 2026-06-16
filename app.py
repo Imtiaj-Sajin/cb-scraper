@@ -96,13 +96,36 @@ class Worker:
         asyncio.run_coroutine_threadsafe(self._run(options), self.loop)
         return True
 
+    def login(self, options):
+        """Open the browser and (try to) authenticate ahead of a run."""
+        import asyncio
+        asyncio.run_coroutine_threadsafe(self._login(options), self.loop)
+        return True
+
+    async def _login(self, options):
+        try:
+            if (options.get("proxy") or None) != self.scraper.proxy:
+                self.scraper.proxy = options.get("proxy") or None
+                await self.scraper.stop()
+            self.scraper.email = options.get("email") or None
+            self.scraper.password = options.get("password") or None
+            await self.scraper.ensure_logged_in()
+        except Exception as e:
+            _log(f"Login error: {e}")
+
     async def _run(self, options):
         try:
             # apply a proxy change by relaunching the browser
             if (options.get("proxy") or None) != self.scraper.proxy:
                 self.scraper.proxy = options.get("proxy") or None
                 await self.scraper.stop()
+            # phase-2 options
+            self.scraper.email = options.get("email") or None
+            self.scraper.password = options.get("password") or None
+            self.scraper.diagnostic = bool(options.get("diagnostic"))
             await self.scraper.start()
+            if options.get("login"):
+                await self.scraper.ensure_logged_in()
             for idx, row in enumerate(list(STATE["rows"])):
                 with LOCK:
                     if STATE["stop_requested"]:
@@ -167,7 +190,8 @@ COMPANY_COLUMNS = [
     "heat_score_delta_90d", "description", "company_status",
     "operating_status", "funding_stage", "employee_count", "location",
     "city", "region", "country", "website", "legal_name", "acquired",
-    "acquired_by", "funding_total", "num_funding_rounds", "num_investors",
+    "acquired_by", "funding_total", "last_funding_amount", "last_funding_date",
+    "num_funding_rounds", "num_investors",
     "news_available", "news_count", "contact_email", "phone", "linkedin",
     "twitter", "facebook", "monthly_web_visits", "key_people_count",
     "status", "error",
@@ -211,10 +235,29 @@ def start():
         "enrich": request.form.get("enrich") == "on",
         "max_people": int(request.form.get("max_people") or 5),
         "proxy": (request.form.get("proxy") or "").strip(),
+        "login": request.form.get("login") == "on",
+        "diagnostic": request.form.get("diagnostic") == "on",
+        "email": (request.form.get("email") or "").strip(),
+        "password": request.form.get("password") or "",
     }
     if not WORKER.submit(domains, options):
         return jsonify(ok=False, error="A run is already in progress."), 409
     return jsonify(ok=True, count=len(domains))
+
+
+@app.route("/login", methods=["POST"])
+def login():
+    """Open Chrome and authenticate before a run (so the session is warm)."""
+    with LOCK:
+        if STATE["running"]:
+            return jsonify(ok=False, error="A run is in progress."), 409
+    options = {
+        "proxy": (request.form.get("proxy") or "").strip(),
+        "email": (request.form.get("email") or "").strip(),
+        "password": request.form.get("password") or "",
+    }
+    WORKER.login(options)
+    return jsonify(ok=True)
 
 
 @app.route("/stop", methods=["POST"])

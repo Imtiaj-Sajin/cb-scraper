@@ -62,7 +62,7 @@
 <body>
 <header>
   <h1>Crunchbase Scraper</h1>
-  <span>domains &rarr; company profile, scores, news &amp; key people &middot; phase 1 (no login)</span>
+  <span>domains &rarr; company profile, scores, funding, news &amp; key people &middot; phase 2 (login)</span>
 </header>
 
 <div class="wrap">
@@ -94,6 +94,31 @@
       <div class="hint">Crunchbase rate-limits by IP. A rotating proxy keeps
         large runs from getting blocked.</div>
 
+      <h3>Phase 2 &middot; logged-in session</h3>
+      <div class="row">
+        <input type="checkbox" name="login" id="login">
+        <label for="login">Use a logged-in session (unlocks funding total)</label>
+      </div>
+      <label for="email">Account email (optional &mdash; for auto-login)</label>
+      <input type="text" name="email" id="email" autocomplete="off"
+        style="width:100%;background:var(--panel);border:1px solid var(--line);
+        color:var(--txt);border-radius:8px;padding:9px;
+        font:13px ui-monospace,Consolas,monospace" placeholder="you@example.com">
+      <label for="password">Account password (optional)</label>
+      <input type="password" name="password" id="password" autocomplete="off"
+        style="width:100%;background:var(--panel);border:1px solid var(--line);
+        color:var(--txt);border-radius:8px;padding:9px;
+        font:13px ui-monospace,Consolas,monospace" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;">
+      <div class="hint">Leave blank to log in by hand in the Chrome window once &mdash;
+        the session then persists. Credentials are sent only to this local app.</div>
+      <div class="row">
+        <input type="checkbox" name="diagnostic" id="diagnostic">
+        <label for="diagnostic">Diagnostic mode (dump requests + funding fields to <code>data/</code>)</label>
+      </div>
+      <div class="btns">
+        <button type="button" class="ghost" id="loginBtn">Log in now</button>
+      </div>
+
       <div class="btns">
         <button type="submit" id="startBtn">Start scraping</button>
         <button type="button" class="ghost" id="stopBtn" disabled>Stop</button>
@@ -118,10 +143,10 @@
     <table>
       <thead><tr>
         <th>#</th><th>Domain</th><th>Status</th><th>Company</th>
-        <th>Growth</th><th>CB Rank</th><th>Heat</th><th>News</th><th>People</th>
+        <th>Growth</th><th>CB Rank</th><th>Heat</th><th>Funding</th><th>News</th><th>People</th>
       </tr></thead>
       <tbody id="tbody">
-        <tr><td colspan="9" style="color:var(--mut)">No run yet.</td></tr>
+        <tr><td colspan="10" style="color:var(--mut)">No run yet.</td></tr>
       </tbody>
     </table>
 
@@ -145,6 +170,17 @@ $("form").addEventListener("submit", async e => {
 $("stopBtn").addEventListener("click", async () => {
   await fetch("/stop", { method:"POST" });
   $("stopBtn").disabled = true;
+});
+
+$("loginBtn").addEventListener("click", async () => {
+  const fd = new FormData();
+  fd.append("email", $("email").value);
+  fd.append("password", $("password").value);
+  fd.append("proxy", $("proxy").value);
+  const r = await fetch("/login", { method:"POST", body:fd });
+  const j = await r.json();
+  if (!j.ok) { alert(j.error || "Could not start login"); return; }
+  poll();
 });
 
 function esc(s){ return (s==null?"":""+s).replace(/[&<>]/g,
@@ -180,10 +216,11 @@ function render(d){
       <td>${esc(rec.growth_score)}</td>
       <td>${esc(rec.cb_rank)}</td>
       <td>${esc(rec.heat_score)}</td>
+      <td>${esc(rec.funding_total)}</td>
       <td>${esc(rec.news_available)}</td>
       <td>${rec.key_people?rec.key_people.length:""}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="9" style="color:var(--mut)">No run yet.</td></tr>`;
+  }).join("") || `<tr><td colspan="10" style="color:var(--mut)">No run yet.</td></tr>`;
 
   const log = $("log");
   log.textContent = (d.log||[]).join("\n");
