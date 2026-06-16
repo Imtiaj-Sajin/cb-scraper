@@ -33,6 +33,21 @@ HOW TO RUN
 8. To stop the program, close the black window.
 
 
+LOGIN  (for funding totals - NEW in v2)
+---------------------------------------
+Funding total is only shown to logged-in Crunchbase users.
+To collect it:
+
+1. Tick "Use a logged-in session".
+2. Either type the account email + password, then click
+   "Log in now", OR leave them blank and click "Log in now"
+   and sign in by hand in the Chrome window that opens.
+3. Once the log says you are logged in, click "Start scraping"
+   as usual. The session is remembered for next time.
+
+(Leave "Diagnostic mode" OFF for normal work.)
+
+
 GOOD TO KNOW
 ------------
 - First launch can take 10-20 seconds. Be patient.
