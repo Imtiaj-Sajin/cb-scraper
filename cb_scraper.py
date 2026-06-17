@@ -71,11 +71,14 @@ DEFAULT_BLOCKED_URLS = [
     "*doubleclick.net*", "*facebook.net*", "*facebook.com/tr*",
     "*hotjar.com*", "*hotjar.io*", "*fullstory.com*", "*clarity.ms*",
     "*cdn.cookielaw.org*", "*bombora*", "*6sense*", "*qualified.com*",
-    "*munchkin.marketo*", "*bizible*", "*pendo.io*",
-    # --- Crunchbase's own view counter (confirm via diagnostic, then enable) ---
-    # "*/v4/data/searches/*",
-    # "*field_aggregates*",
-    # "*/v4/md/*",
+    "*munchkin.marketo*", "*bizible*", "*pendo.io*", "*sentry.io*",
+    # --- Crunchbase's own client-event counter ---
+    # Identified via diagnostic on an org page: /v4/cb/events/clientapp fires
+    # again LATE in the load (right as the page settles) - that second call is
+    # what records the profile view against the account's quota. Everything we
+    # collect is already in the first document response, so dropping it costs no
+    # data. (Do NOT block /v4/cb/billing/* - the page needs those to render.)
+    "*/v4/cb/events/*",
 ]
 
 # Markers that a page is being viewed by a logged-IN user (best-effort; CB
