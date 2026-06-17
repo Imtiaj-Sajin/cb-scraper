@@ -126,32 +126,16 @@ class Worker:
             await self.scraper.start()
             if options.get("login"):
                 await self.scraper.ensure_logged_in()
-            for idx, row in enumerate(list(STATE["rows"])):
-                with LOCK:
-                    if STATE["stop_requested"]:
-                        _log("Stop requested - halting run.")
-                        break
-                    STATE["rows"][idx]["status"] = "running"
-                domain = row["domain"]
-                _log(f"({idx + 1}/{len(STATE['rows'])}) {domain}")
 
-                result = await self.scraper.scrape_domain(
-                    domain, enrich=options["enrich"],
-                    max_people=options["max_people"],
-                )
-                with LOCK:
-                    STATE["rows"][idx].update(
-                        status=result["status"],
-                        record=result["record"],
-                        error=result["error"],
-                    )
-                if result["status"] == "done":
-                    nm = result["record"].get("name")
-                    _log(f"  OK - {nm} "
-                         f"(growth={result['record'].get('growth_score')}, "
-                         f"rank={result['record'].get('cb_rank')})")
-                else:
-                    _log(f"  {result['status'].upper()} - {result['error']}")
+            # diagnostic mode records per-request data on the main tab, so it
+            # only makes sense single-tab.
+            conc = int(options.get("concurrency") or 1)
+            if options.get("diagnostic"):
+                conc = 1
+            if conc > 1:
+                await self._run_parallel(options, conc)
+            else:
+                await self._run_sequential(options)
         except Exception as e:
             _log(f"FATAL: {e}")
         finally:
@@ -160,6 +144,63 @@ class Worker:
                 STATE["finished_at"] = datetime.now().isoformat()
             done = sum(1 for r in STATE["rows"] if r["status"] == "done")
             _log(f"Run finished. {done}/{len(STATE['rows'])} succeeded.")
+
+    @staticmethod
+    def _finish_row(idx, result):
+        """Write a finished scrape result into STATE and log a one-liner."""
+        with LOCK:
+            STATE["rows"][idx].update(
+                status=result["status"], record=result["record"],
+                error=result["error"],
+            )
+        if result["status"] == "done":
+            rec = result["record"]
+            _log(f"  OK - {rec.get('name')} "
+                 f"(growth={rec.get('growth_score')}, rank={rec.get('cb_rank')})")
+        elif result["status"] == "mismatch":
+            _log(f"  MISMATCH - {result['error']}")
+        else:
+            _log(f"  {result['status'].upper()} - {result['error']}")
+
+    async def _run_sequential(self, options):
+        total = len(STATE["rows"])
+        for idx, row in enumerate(list(STATE["rows"])):
+            with LOCK:
+                if STATE["stop_requested"]:
+                    _log("Stop requested - halting run.")
+                    break
+                STATE["rows"][idx]["status"] = "running"
+            _log(f"({idx + 1}/{total}) {row['domain']}")
+            result = await self.scraper.scrape_domain(
+                row["domain"], enrich=options["enrich"],
+                max_people=options["max_people"],
+            )
+            self._finish_row(idx, result)
+
+    async def _run_parallel(self, options, conc):
+        import asyncio
+        total = len(STATE["rows"])
+        sem = asyncio.Semaphore(conc)
+        _log(f"Parallel mode: up to {conc} tabs at once.")
+
+        async def work(idx, domain):
+            async with sem:
+                with LOCK:
+                    if STATE["stop_requested"]:
+                        return
+                    STATE["rows"][idx]["status"] = "running"
+                _log(f"({idx + 1}/{total}) {domain}")
+                try:
+                    result = await self.scraper.scrape_domain_tab(
+                        domain, enrich=options["enrich"],
+                        max_people=options["max_people"],
+                    )
+                except Exception as e:
+                    result = {"status": "error", "record": None, "error": str(e)}
+                self._finish_row(idx, result)
+
+        await asyncio.gather(*(work(i, r["domain"])
+                               for i, r in enumerate(list(STATE["rows"]))))
 
 
 WORKER = Worker()
@@ -189,7 +230,8 @@ COMPANY_COLUMNS = [
     "growth_score_delta_90d", "cb_rank", "cb_rank_delta_90d", "heat_score",
     "heat_score_delta_90d", "description", "company_status",
     "operating_status", "funding_stage", "employee_count", "location",
-    "city", "region", "country", "website", "legal_name", "acquired",
+    "city", "region", "country", "website", "domain_match", "matched_website",
+    "legal_name", "acquired",
     "acquired_by", "funding_total", "last_funding_amount", "last_funding_date",
     "num_funding_rounds", "num_investors",
     "news_available", "news_count", "contact_email", "phone", "linkedin",
@@ -231,6 +273,12 @@ def start():
     if not domains:
         return jsonify(ok=False, error="No valid domains found."), 400
 
+    try:
+        concurrency = int(request.form.get("concurrency") or 1)
+    except ValueError:
+        concurrency = 1
+    concurrency = max(1, min(6, concurrency))   # 1..6 tabs
+
     options = {
         "enrich": request.form.get("enrich") == "on",
         "max_people": int(request.form.get("max_people") or 5),
@@ -239,6 +287,7 @@ def start():
         "diagnostic": request.form.get("diagnostic") == "on",
         "email": (request.form.get("email") or "").strip(),
         "password": request.form.get("password") or "",
+        "concurrency": concurrency,
     }
     if not WORKER.submit(domains, options):
         return jsonify(ok=False, error="A run is already in progress."), 409

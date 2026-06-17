@@ -185,21 +185,28 @@ class CrunchbaseScraper:
         )
         if server and user:
             await self._install_proxy_auth(user, pw)
-        await self._install_network_controls()
+        await self._install_network_controls(capture=True)
+        if self.blocked_urls:
+            self.log(f"Blocking {len(self.blocked_urls)} telemetry/counter "
+                     f"URL pattern(s).")
         self.log("Browser ready.")
 
-    async def _install_network_controls(self):
+    async def _install_network_controls(self, tab=None, capture=False):
         """
-        Enable CDP networking so we can (a) record every request URL during a
-        navigation (diagnostic / beacon-hunting) and (b) block telemetry +
-        usage-counter URLs so a view is not charged against the account quota.
+        On the given tab (default = main tab): enable CDP networking and block
+        telemetry + usage-counter URLs so a view is not charged against the
+        account quota. Only when `capture` is set (the main / diagnostic tab) do
+        we also record every request URL, for beacon-hunting.
+
+        Called once per tab - including each parallel tab - so blocking applies
+        everywhere.
         """
         try:
             from nodriver import cdp
         except Exception as e:
             self.log(f"(network controls unavailable: {e})")
             return
-        tab = self.browser.main_tab
+        tab = tab or self.browser.main_tab
         try:
             await tab.send(cdp.network.enable())
             if self.blocked_urls:
@@ -210,19 +217,17 @@ class CrunchbaseScraper:
                             or getattr(cdp.network, "set_blocked_ur_l_s", None))
                 if block_fn:
                     await tab.send(block_fn(urls=self.blocked_urls))
-                    self.log(f"Blocking {len(self.blocked_urls)} telemetry/"
-                             f"counter URL pattern(s).")
-                else:
+                elif capture:
                     self.log("(setBlockedURLs not found in this nodriver build; "
                              "telemetry not blocked)")
 
-            def _on_req(ev):
-                try:
-                    self._req_log.append(ev.request.url)
-                except Exception:
-                    pass
-
-            tab.add_handler(cdp.network.RequestWillBeSent, _on_req)
+            if capture:
+                def _on_req(ev):
+                    try:
+                        self._req_log.append(ev.request.url)
+                    except Exception:
+                        pass
+                tab.add_handler(cdp.network.RequestWillBeSent, _on_req)
             self._net_installed = True
         except Exception as e:
             self.log(f"(could not install network controls: {e})")
@@ -400,10 +405,17 @@ class CrunchbaseScraper:
 
     # --- low-level fetch ---------------------------------------------------
 
-    async def _navigate(self, url, expect):
-        """One navigation attempt. Returns HTML, or raises (block / conn loss)."""
-        self._req_log = []               # fresh request capture for this nav
-        tab = await asyncio.wait_for(self.browser.get(url), timeout=NAV_TIMEOUT)
+    async def _navigate(self, url, expect, tab=None):
+        """One navigation attempt. Returns HTML, or raises (block / conn loss).
+
+        With `tab` given, navigates that tab (parallel mode). Otherwise it uses
+        the main tab via browser.get and records requests for diagnostics.
+        """
+        if tab is None:
+            self._req_log = []           # fresh request capture for this nav
+            tab = await asyncio.wait_for(self.browser.get(url), timeout=NAV_TIMEOUT)
+        else:
+            await asyncio.wait_for(tab.get(url), timeout=NAV_TIMEOUT)
 
         deadline = time.time() + CHALLENGE_TIMEOUT
         clicks = 0
@@ -432,7 +444,7 @@ class CrunchbaseScraper:
         self._block_streak += 1
         raise RuntimeError("Cloudflare challenge did not clear")
 
-    async def fetch(self, url, expect="ng-state"):
+    async def fetch(self, url, expect="ng-state", tab=None):
         """
         Navigate to `url` and return page HTML once it is genuinely loaded.
 
@@ -445,11 +457,13 @@ class CrunchbaseScraper:
         await self.start()
         for attempt in (1, 2):
             try:
-                return await self._navigate(url, expect)
+                return await self._navigate(url, expect, tab=tab)
             except RuntimeError:
                 raise                       # genuine Cloudflare block
             except Exception as e:
-                if _is_conn_error(e) and attempt == 1:
+                # only the main-tab path may relaunch the whole browser; a
+                # provided tab (parallel) just fails this one domain.
+                if tab is None and _is_conn_error(e) and attempt == 1:
                     self.log(f"  browser connection lost ({e}); relaunching")
                     await self.restart()
                     continue
@@ -501,7 +515,7 @@ class CrunchbaseScraper:
                 out.append(slug)
         return out
 
-    async def _search_engine_slug(self, domain):
+    async def _search_engine_slug(self, domain, tab=None):
         """Ask Google (then Bing) which Crunchbase org page matches a domain.
 
         Google resolves the right org page more often, so we try it first and
@@ -516,7 +530,7 @@ class CrunchbaseScraper:
         for name, url in engines:
             try:
                 self.log(f"  searching {name} for {domain}")
-                html = await self.fetch(url, expect=None)
+                html = await self.fetch(url, expect=None, tab=tab)
                 links = self._crunchbase_links(html)
                 if links:
                     self.log(f"  {name} -> {links[0]}")
@@ -526,7 +540,21 @@ class CrunchbaseScraper:
             await self._polite_pause()
         return None
 
-    async def resolve(self, domain):
+    @staticmethod
+    def _domain_matches(input_domain, website):
+        """
+        True / False if the org's listed website matches the input domain;
+        None when Crunchbase lists no website (so it can't be verified).
+        Crunchbase shows the website on every org page even without login, so
+        this catches search results that resolved to the WRONG company.
+        """
+        site = cb_parser.domain_of(website)
+        d = (input_domain or "").lower()
+        if not site:
+            return None
+        return site == d or site.endswith("." + d) or d.endswith("." + site)
+
+    async def resolve(self, domain, tab=None):
         """
         Resolve a domain to (permalink, org_html). org_html is returned when we
         already loaded the right page during resolution, to avoid a 2nd fetch.
@@ -538,7 +566,7 @@ class CrunchbaseScraper:
         for slug in self._slug_candidates(domain):
             url = f"https://www.crunchbase.com/organization/{slug}"
             try:
-                html = await self.fetch(url)
+                html = await self.fetch(url, tab=tab)
             except Exception as e:
                 self.log(f"  guess '{slug}' failed: {e}")
                 continue
@@ -546,15 +574,14 @@ class CrunchbaseScraper:
             if not rec:
                 self.log(f"  guess '{slug}': no Crunchbase page there")
                 continue
-            site = cb_parser.domain_of(rec.get("website"))
-            if site and (site == domain or site.endswith("." + domain)
-                         or domain.endswith("." + site)):
+            if self._domain_matches(domain, rec.get("website")):
                 self.log(f"  matched by direct guess: {slug}")
                 return rec.get("crunchbase_permalink") or slug, html
+            site = cb_parser.domain_of(rec.get("website"))
             self.log(f"  guess '{slug}' is a different company ({site or '?'})")
 
         # 2) search engines
-        slug = await self._search_engine_slug(domain)
+        slug = await self._search_engine_slug(domain, tab=tab)
         if not slug:
             return None, None
 
@@ -562,12 +589,14 @@ class CrunchbaseScraper:
         for attempt in (1, 2):
             try:
                 html = await self.fetch(
-                    f"https://www.crunchbase.com/organization/{slug}")
+                    f"https://www.crunchbase.com/organization/{slug}", tab=tab)
             except Exception as e:
                 self.log(f"  loading '{slug}' failed: {e}")
                 return None, None
             rec = cb_parser.parse_organization(html)
             if rec:
+                # NB: the website check happens in scrape_domain so the matched
+                # record is still surfaced (flagged) rather than silently lost.
                 return rec.get("crunchbase_permalink") or slug, html
             self.log(f"  '{slug}' loaded but org data not parsed "
                      f"(html={len(html)}, ng-state={'ng-state' in html}, "
@@ -577,14 +606,14 @@ class CrunchbaseScraper:
 
     # --- person enrichment -------------------------------------------------
 
-    async def enrich_people(self, people, max_people):
+    async def enrich_people(self, people, max_people, tab=None):
         """Visit individual person pages to pull socials / website / email."""
         for person in people[:max_people]:
             if not person.get("crunchbase_url"):
                 continue
             try:
                 await self._polite_pause()
-                html = await self.fetch(person["crunchbase_url"])
+                html = await self.fetch(person["crunchbase_url"], tab=tab)
                 extra = cb_parser.parse_person(html)
                 for k, v in extra.items():
                     person[k] = v
@@ -594,14 +623,22 @@ class CrunchbaseScraper:
 
     # --- the public per-domain entry point --------------------------------
 
-    async def scrape_domain(self, domain, enrich=False, max_people=5):
+    async def scrape_domain(self, domain, enrich=False, max_people=5, tab=None):
         """
         Full pipeline for one domain. Returns a result dict with keys:
-        status ('done' | 'not_found' | 'error'), record (or None), error.
+        status ('done' | 'mismatch' | 'not_found' | 'error'), record, error.
+
+        'mismatch' means a Crunchbase company was found but its listed website
+        does not match the requested domain (likely a wrong search hit) - the
+        record is still returned so it can be reviewed, just clearly flagged.
+
+        When `tab` is given the work runs in that tab (parallel mode); the
+        browser-restart maintenance is then skipped (it would kill sibling tabs).
         """
-        await self._maybe_maintenance()
+        if tab is None:
+            await self._maybe_maintenance()
         try:
-            permalink, html = await self.resolve(domain)
+            permalink, html = await self.resolve(domain, tab=tab)
             if not permalink or not html:
                 return {"status": "not_found", "record": None,
                         "error": "No matching Crunchbase organization found"}
@@ -611,16 +648,46 @@ class CrunchbaseScraper:
                 return {"status": "error", "record": None,
                         "error": "Found page but could not parse data"}
 
-            if self.diagnostic:
+            if self.diagnostic and tab is None:
                 self._dump_diagnostics(record.get("crunchbase_permalink")
                                        or permalink, html)
 
             record["input_domain"] = domain
+            match = self._domain_matches(domain, record.get("website"))
+            record["matched_website"] = cb_parser.domain_of(record.get("website"))
+            record["domain_match"] = match
+
+            if match is False:
+                # found a company, but it's the wrong one for this domain
+                return {"status": "mismatch", "record": record,
+                        "error": (f"Found '{record.get('name')}' "
+                                  f"({record['matched_website'] or '?'}) - website "
+                                  f"does not match input domain '{domain}'")}
+
             if enrich and record.get("key_people"):
-                await self.enrich_people(record["key_people"], max_people)
+                await self.enrich_people(record["key_people"], max_people, tab=tab)
 
             return {"status": "done", "record": record, "error": None}
         except Exception as e:
             return {"status": "error", "record": None, "error": str(e)}
         finally:
             await self._polite_pause()
+
+    async def scrape_domain_tab(self, domain, enrich=False, max_people=5):
+        """Scrape one domain in its own fresh tab - used by parallel runs.
+
+        The tab inherits the browser's shared Cloudflare clearance and login
+        cookies, so it does not re-solve the challenge from scratch.
+        """
+        await self.start()
+        tab = await self.browser.get("about:blank", new_tab=True)
+        try:
+            await self._install_network_controls(tab)
+            return await self.scrape_domain(domain, enrich, max_people, tab=tab)
+        finally:
+            try:
+                res = tab.close()
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                pass

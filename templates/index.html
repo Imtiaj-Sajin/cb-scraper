@@ -50,6 +50,7 @@
   .s-running{background:rgba(59,130,246,.15);color:var(--acc);}
   .s-queued{background:rgba(139,147,163,.12);color:var(--mut);}
   .s-error,.s-not_found{background:rgba(239,68,68,.13);color:var(--err);}
+  .s-mismatch{background:rgba(245,158,11,.15);color:var(--warn);}
   .log { background:#0a0c10; border:1px solid var(--line); border-radius:8px;
          padding:10px; height:200px; overflow:auto; font:12px/1.5 ui-monospace,
          Consolas,monospace; color:#aab2c0; white-space:pre-wrap; }
@@ -85,6 +86,14 @@
         <input type="number" name="max_people" id="max_people" value="5"
                min="1" max="25" style="width:70px">
       </div>
+      <div class="row">
+        <label for="concurrency" style="white-space:nowrap">Parallel tabs (1&ndash;6)</label>
+        <input type="number" name="concurrency" id="concurrency" value="1"
+               min="1" max="6" style="width:70px">
+      </div>
+      <div class="hint">Opens this many Crunchbase tabs at once for faster bulk
+        runs. 1 = the safe sequential mode. Higher = faster but more likely to
+        trip Cloudflare; 3&ndash;4 is a good balance. (Forced to 1 in Diagnostic mode.)</div>
 
       <label>Proxy (optional &mdash; recommended for large runs)</label>
       <input type="text" name="proxy" id="proxy" style="width:100%;
