@@ -87,13 +87,15 @@
                min="1" max="25" style="width:70px">
       </div>
       <div class="row">
-        <label for="concurrency" style="white-space:nowrap">Parallel tabs (1&ndash;6)</label>
+        <label for="concurrency" style="white-space:nowrap">Parallel browsers (1&ndash;6)</label>
         <input type="number" name="concurrency" id="concurrency" value="1"
                min="1" max="6" style="width:70px">
       </div>
-      <div class="hint">Opens this many Crunchbase tabs at once for faster bulk
-        runs. 1 = the safe sequential mode. Higher = faster but more likely to
-        trip Cloudflare; 3&ndash;4 is a good balance. (Forced to 1 in Diagnostic mode.)</div>
+      <div class="hint">Runs this many Chrome windows at once for faster bulk
+        runs (each is a separate browser &mdash; that's what actually runs in
+        parallel). 1 = safe sequential mode. Higher = faster but more RAM and
+        more likely to trip Cloudflare; 3&ndash;4 is a good balance. Each window
+        logs in on its own the first time. (Forced to 1 in Diagnostic mode.)</div>
 
       <label>Proxy (optional &mdash; recommended for large runs)</label>
       <input type="text" name="proxy" id="proxy" style="width:100%;

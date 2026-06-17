@@ -1,5 +1,6 @@
-# --- browser profile (large, machine-specific, holds cookies) ---
-.browser_profile/
+# --- browser profiles (large, machine-specific, hold cookies) ---
+# .browser_profile, plus per-worker .browser_profile_1 / _2 ... for parallel runs
+.browser_profile*/
 
 # --- built version folders + PyInstaller scratch (large, regenerated) ---
 _v*/

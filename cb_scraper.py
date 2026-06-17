@@ -149,10 +149,11 @@ class CrunchbaseScraper:
     """Owns one Chrome instance and knows how to pull Crunchbase data."""
 
     def __init__(self, log=print, proxy=None, email=None, password=None,
-                 blocked_urls=None, diagnostic=False):
+                 blocked_urls=None, diagnostic=False, profile_dir=None):
         self.browser = None
         self.log = log
         self.proxy = proxy or None        # 'host:port' or 'http://user:pass@host:port'
+        self.profile_dir = profile_dir or PROFILE_DIR   # own Chrome profile
         self._block_streak = 0
         # phase 2
         self.email = email or None
@@ -170,7 +171,7 @@ class CrunchbaseScraper:
         if self.browser is not None:
             return
         self.log("Launching browser...")
-        os.makedirs(PROFILE_DIR, exist_ok=True)
+        os.makedirs(self.profile_dir, exist_ok=True)
 
         args = []
         server, user, pw = _parse_proxy(self.proxy)
@@ -180,7 +181,7 @@ class CrunchbaseScraper:
 
         self.browser = await uc.start(
             headless=HEADLESS,
-            user_data_dir=PROFILE_DIR,    # warm, persistent profile builds trust
+            user_data_dir=self.profile_dir,  # warm, persistent profile builds trust
             browser_args=args,
         )
         if server and user:
@@ -672,22 +673,3 @@ class CrunchbaseScraper:
             return {"status": "error", "record": None, "error": str(e)}
         finally:
             await self._polite_pause()
-
-    async def scrape_domain_tab(self, domain, enrich=False, max_people=5):
-        """Scrape one domain in its own fresh tab - used by parallel runs.
-
-        The tab inherits the browser's shared Cloudflare clearance and login
-        cookies, so it does not re-solve the challenge from scratch.
-        """
-        await self.start()
-        tab = await self.browser.get("about:blank", new_tab=True)
-        try:
-            await self._install_network_controls(tab)
-            return await self.scrape_domain(domain, enrich, max_people, tab=tab)
-        finally:
-            try:
-                res = tab.close()
-                if asyncio.iscoroutine(res):
-                    await res
-            except Exception:
-                pass

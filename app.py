@@ -178,20 +178,56 @@ class Worker:
             self._finish_row(idx, result)
 
     async def _run_parallel(self, options, conc):
+        """Run `conc` independent browsers in parallel, each pulling domains
+        from a shared queue. nodriver serializes work within one browser, so
+        true parallelism needs separate browser instances (each its own Chrome
+        profile + login session)."""
         import asyncio
-        total = len(STATE["rows"])
-        sem = asyncio.Semaphore(conc)
-        _log(f"Parallel mode: up to {conc} tabs at once.")
+        from cb_scraper import CrunchbaseScraper, PROFILE_DIR
 
-        async def work(idx, domain):
-            async with sem:
+        total = len(STATE["rows"])
+
+        # worker 0 is the main scraper (already started + logged in); spin up
+        # the rest, each with its own persistent profile.
+        pool = [self.scraper]
+        for i in range(1, conc):
+            pool.append(CrunchbaseScraper(
+                log=_log,
+                proxy=options.get("proxy") or None,
+                email=options.get("email") or None,
+                password=options.get("password") or None,
+                profile_dir=f"{PROFILE_DIR}_{i}",
+            ))
+
+        _log(f"Parallel mode: {conc} browsers. Warming up extra browser(s)...")
+
+        async def prep(s):
+            try:
+                await s.start()
+                if options.get("login"):
+                    await s.ensure_logged_in()
+            except Exception as e:
+                _log(f"  worker browser prep failed: {e}")
+
+        await asyncio.gather(*(prep(s) for s in pool[1:]))
+
+        queue = asyncio.Queue()
+        for idx, row in enumerate(list(STATE["rows"])):
+            queue.put_nowait((idx, row["domain"]))
+
+        async def runner(s, wid):
+            while True:
+                try:
+                    idx, domain = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
                 with LOCK:
                     if STATE["stop_requested"]:
                         return
                     STATE["rows"][idx]["status"] = "running"
-                _log(f"({idx + 1}/{total}) {domain}")
+                _log(f"[w{wid}] ({idx + 1}/{total}) {domain}")
                 try:
-                    result = await self.scraper.scrape_domain_tab(
+                    result = await s.scrape_domain(
                         domain, enrich=options["enrich"],
                         max_people=options["max_people"],
                     )
@@ -199,8 +235,15 @@ class Worker:
                     result = {"status": "error", "record": None, "error": str(e)}
                 self._finish_row(idx, result)
 
-        await asyncio.gather(*(work(i, r["domain"])
-                               for i, r in enumerate(list(STATE["rows"]))))
+        try:
+            await asyncio.gather(*(runner(s, i) for i, s in enumerate(pool)))
+        finally:
+            # tear down the extra browsers; keep the main one warm for next run
+            for s in pool[1:]:
+                try:
+                    await s.stop()
+                except Exception:
+                    pass
 
 
 WORKER = Worker()
