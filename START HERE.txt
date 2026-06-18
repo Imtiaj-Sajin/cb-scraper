@@ -45,7 +45,24 @@ To collect it:
 3. Once the log says you are logged in, click "Start scraping"
    as usual. The session is remembered for next time.
 
+With the email + password filled in, login now happens
+AUTOMATICALLY when you press "Start scraping" - no button
+needed. If you are already signed in, it skips the login step.
+
 (Leave "Diagnostic mode" OFF for normal work.)
+
+
+FASTER BULK RUNS  (NEW in v3)
+-----------------------------
+- "Parallel browsers (1-6)": opens several Chrome windows at
+  once and splits the domains between them. 1 = normal/safe.
+  3-4 = much faster (uses more memory; each window logs in on
+  its own the first time). Keep it modest to avoid blocks.
+- Your settings (account, parallel count, etc.) are remembered
+  between sessions - only the domain list starts empty.
+- Wrong matches: if a domain resolves to a different company,
+  the row is marked "mismatch" (amber) instead of giving you
+  wrong data.
 
 
 GOOD TO KNOW
