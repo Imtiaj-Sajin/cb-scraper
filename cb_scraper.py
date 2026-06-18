@@ -85,7 +85,12 @@ DEFAULT_BLOCKED_URLS = [
 # changes these, so we check several).
 _LOGGED_IN_MARKERS = ('"is_logged_in":true', '"isLoggedIn":true', '/logout',
                       'data-cy="account-menu"', 'Sign out', 'My Profile')
-_LOGGED_OUT_MARKERS = ('Sign in to continue', 'href="/login"', 'Log In to')
+
+# If any of these appear, the login FORM is on screen => we are NOT signed in.
+# Crunchbase redirects an already-authenticated user away from /login, so the
+# absence of this form on /login is a reliable "already logged in" signal.
+_LOGIN_FORM_MARKERS = ('type="password"', 'name="password"', 'Forgot password',
+                       'Log In With Single Sign-on', 'Send Me a Login Link')
 
 # NOTE on cookies: we deliberately do NOT wipe cookies mid-run. The Cloudflare
 # `cf_clearance` cookie is what proves we already passed a challenge - keeping
@@ -285,8 +290,15 @@ class CrunchbaseScraper:
     # --- login (phase 2) ---------------------------------------------------
 
     @staticmethod
+    def _login_form_present(html):
+        """True if the Crunchbase login form is on the page (=> not signed in)."""
+        return bool(html) and any(m in html for m in _LOGIN_FORM_MARKERS)
+
+    @staticmethod
     def _looks_logged_in(html, email=None):
         if not html:
+            return False
+        if CrunchbaseScraper._login_form_present(html):
             return False
         # the strongest signal: the account's own email is embedded in the page
         if email and email.lower() in html.lower():
@@ -321,36 +333,46 @@ class CrunchbaseScraper:
         password = password or self.password
         await self.start()
 
-        # 1) already logged in via the warm profile?
+        # 1) fast path: the home page already shows our account (no /login hit)
         try:
             html = await self.fetch(CB_BASE, expect=None)
-            if self._looks_logged_in(html, email):
+            if email and email.lower() in (html or "").lower():
                 self.logged_in = True
-                self.log("Logged-in session detected (persistent profile).")
+                self.log("Already logged in (account detected on home page).")
                 return True
         except Exception as e:
             self.log(f"  (login pre-check failed: {e})")
 
-        # 2) no creds -> manual sign-in path
+        # 2) authoritative: open /login. Crunchbase bounces an authenticated
+        #    user off it, so if the login form isn't shown we are already in.
+        try:
+            html = await self.fetch(CB_LOGIN_URL, expect=None)
+        except Exception as e:
+            self.log(f"  could not open login page: {e}")
+            html = ""
+        if html and not self._login_form_present(html):
+            self.logged_in = True
+            self.log("Already logged in (login page redirected away).")
+            return True
+
+        # 3) need to log in but no credentials -> manual sign-in
         if not (email and password):
-            self.log("No credentials given - opening login page; sign in "
-                     "manually in the Chrome window (the session persists).")
-            try:
-                await self.fetch(CB_LOGIN_URL, expect=None)
-            except Exception as e:
-                self.log(f"  could not open login page: {e}")
+            self.log("Not logged in - sign in manually in the Chrome window "
+                     "(the session will persist for next time).")
             return False
 
-        # 3) scripted auto-login (selectors as of 2026-06)
+        # 4) scripted auto-login. Clear each field FIRST so a pre-filled value
+        #    can't get doubled up (e.g. 'foo@x.comfoo@x.com').
         self.log(f"Auto-logging in as {email} ...")
         tab = self.browser.main_tab
         try:
-            await self.fetch(CB_LOGIN_URL, expect=None)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(1.0)
             email_el = await tab.select("input[name=email], input[type=email]")
+            await email_el.clear_input()
             await email_el.send_keys(email)
             await asyncio.sleep(0.4)
             pass_el = await tab.select("input[name=password], input[type=password]")
+            await pass_el.clear_input()
             await pass_el.send_keys(password)
             await asyncio.sleep(0.4)
 
@@ -359,23 +381,24 @@ class CrunchbaseScraper:
             self.log("  submitted login (Enter); waiting for session...")
             await asyncio.sleep(6.0)
 
-            # fallback: if Enter didn't navigate, click the Sign In button
+            # fallback: if the form is still up, click the submit button
             html = await tab.get_content()
-            if not self._looks_logged_in(html, email):
+            if self._login_form_present(html):
                 try:
-                    btn = await tab.find("Sign In", best_match=True)
+                    btn = await tab.select("button[type=submit]")
                     await btn.click()
-                    self.log("  Enter didn't take; clicked Sign In, waiting...")
+                    self.log("  Enter didn't take; clicked Log In, waiting...")
                     await asyncio.sleep(6.0)
                 except Exception:
                     pass
 
-            # confirm against a normal page (login often redirects elsewhere)
+            # confirm: reload /login; if the form is gone, we're in
             try:
-                html = await self.fetch(CB_BASE, expect=None)
+                html = await self.fetch(CB_LOGIN_URL, expect=None)
+                self.logged_in = not self._login_form_present(html)
             except Exception:
-                html = await tab.get_content()
-            self.logged_in = self._looks_logged_in(html, email)
+                self.logged_in = self._looks_logged_in(
+                    await tab.get_content(), email)
         except Exception as e:
             self.log(f"  scripted login failed ({e}); finish it manually "
                      f"in the Chrome window.")
