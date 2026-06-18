@@ -171,8 +171,33 @@
 <script>
 const $ = id => document.getElementById(id);
 
+// --- remember every setting except the domain list (in this browser) ---
+const SETTINGS = {
+  text:  ["max_people", "concurrency", "proxy", "email", "password"],
+  check: ["enrich", "login", "diagnostic"],
+};
+const SKEY = "cbs_settings_v1";
+function saveSettings(){
+  const data = {};
+  SETTINGS.text.forEach(id => { if ($(id)) data[id] = $(id).value; });
+  SETTINGS.check.forEach(id => { if ($(id)) data[id] = $(id).checked; });
+  try { localStorage.setItem(SKEY, JSON.stringify(data)); } catch(e){}
+}
+function loadSettings(){
+  let data = {};
+  try { data = JSON.parse(localStorage.getItem(SKEY) || "{}"); } catch(e){}
+  SETTINGS.text.forEach(id => { if (data[id] != null && $(id)) $(id).value = data[id]; });
+  SETTINGS.check.forEach(id => { if (data[id] != null && $(id)) $(id).checked = data[id]; });
+}
+loadSettings();
+[...SETTINGS.text, ...SETTINGS.check].forEach(id => {
+  const el = $(id);
+  if (el){ el.addEventListener("change", saveSettings); el.addEventListener("input", saveSettings); }
+});
+
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
+  saveSettings();
   const fd = new FormData($("form"));
   const r = await fetch("/start", { method:"POST", body:fd });
   const j = await r.json();
@@ -186,6 +211,7 @@ $("stopBtn").addEventListener("click", async () => {
 });
 
 $("loginBtn").addEventListener("click", async () => {
+  saveSettings();
   const fd = new FormData();
   fd.append("email", $("email").value);
   fd.append("password", $("password").value);
