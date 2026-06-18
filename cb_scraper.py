@@ -680,6 +680,15 @@ class CrunchbaseScraper:
                                        or permalink, html)
 
             record["input_domain"] = domain
+
+            # funding_total fallback depends on session state (parser leaves it
+            # None when absent). Only say "login required" when we're NOT logged
+            # in; if we ARE logged in and it's still absent, leave it blank so it
+            # doesn't look like a login problem.
+            if not record.get("funding_total"):
+                record["funding_total"] = (
+                    "" if self.logged_in else "Locked (login required)")
+
             match = self._domain_matches(domain, record.get("website"))
             record["matched_website"] = cb_parser.domain_of(record.get("website"))
             record["domain_match"] = match

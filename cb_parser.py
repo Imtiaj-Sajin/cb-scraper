@@ -282,15 +282,17 @@ def parse_organization(html):
             break
 
     # --- funding ------------------------------------------------------------
-    # Funding TOTAL is omitted from the page for logged-out visitors (we only
-    # get is_present:true). With a logged-in session the real amount IS present
-    # in funding_rounds_summary / financials, so we parse it; otherwise we fall
-    # back to the "Locked" marker. Round/investor counts are public either way.
+    # Funding TOTAL is omitted from the page for logged-out visitors. With a
+    # logged-in session the real amount IS present in funding_rounds_summary /
+    # financials. We return the raw value or None here; the SCRAPER fills the
+    # fallback text, because only it knows whether we are logged in:
+    #   logged out         -> "Locked (login required)"
+    #   logged in, absent  -> blank (the company simply has no total)
+    # That avoids the misleading "login required" on a logged-in run.
     rec["funding_total"] = (
         _money(funding_sum.get("funding_total"))
         or _money(financials.get("funding_total"))
         or _money(funding_sum.get("funding_total_usd"))
-        or "Locked (login required)"
     )
     rec["last_funding_amount"] = (
         _money(funding_sum.get("last_funding_total"))
