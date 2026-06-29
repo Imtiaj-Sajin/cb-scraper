@@ -156,10 +156,10 @@
     <table>
       <thead><tr>
         <th>#</th><th>Domain</th><th>Status</th><th>Company</th>
-        <th>Growth</th><th>CB Rank</th><th>Heat</th><th>Funding</th><th>News</th><th>People</th>
+        <th>Address</th><th>Growth</th><th>Funding</th><th>News</th><th>People</th>
       </tr></thead>
       <tbody id="tbody">
-        <tr><td colspan="10" style="color:var(--mut)">No run yet.</td></tr>
+        <tr><td colspan="9" style="color:var(--mut)">No run yet.</td></tr>
       </tbody>
     </table>
 
@@ -252,14 +252,13 @@ function render(d){
       <td><span class="pill s-${r.status}">${r.status}</span>
           ${r.error?`<div class="hint">${esc(r.error)}</div>`:""}</td>
       <td>${name}</td>
+      <td>${esc(rec.location)}</td>
       <td>${esc(rec.growth_score)}</td>
-      <td>${esc(rec.cb_rank)}</td>
-      <td>${esc(rec.heat_score)}</td>
       <td>${esc(rec.funding_total)}</td>
       <td>${esc(rec.news_available)}</td>
       <td>${rec.key_people?rec.key_people.length:""}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="10" style="color:var(--mut)">No run yet.</td></tr>`;
+  }).join("") || `<tr><td colspan="9" style="color:var(--mut)">No run yet.</td></tr>`;
 
   const log = $("log");
   log.textContent = (d.log||[]).join("\n");

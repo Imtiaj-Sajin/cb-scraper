@@ -36,6 +36,9 @@ def _resource_dir():
 
 
 app = Flask(__name__, template_folder=os.path.join(_resource_dir(), "templates"))
+# pick up template edits without a server restart (dev convenience; harmless
+# in the packaged app where templates don't change)
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 # --------------------------------------------------------------------------
 # shared run state - mutated only by the worker thread, read by Flask
