@@ -70,6 +70,8 @@ class Worker:
     def __init__(self):
         self.loop = None
         self.scraper = None
+        self.run_stamp = None          # timestamp tag for the current run's files
+        self._last_autosave = 0.0      # throttle disk writes during a run
         self._ready = threading.Event()
         threading.Thread(target=self._thread_main, daemon=True).start()
         self._ready.wait()
@@ -117,6 +119,10 @@ class Worker:
             _log(f"Login error: {e}")
 
     async def _run(self, options):
+        # one timestamp tag per run, so each run's files sit side by side
+        self.run_stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        self._last_autosave = 0.0
+        _log(f"Results will be auto-saved to: results\\companies_{self.run_stamp}.csv")
         try:
             # apply a proxy change by relaunching the browser
             if (options.get("proxy") or None) != self.scraper.proxy:
@@ -147,10 +153,31 @@ class Worker:
                 STATE["finished_at"] = datetime.now().isoformat()
             done = sum(1 for r in STATE["rows"] if r["status"] == "done")
             _log(f"Run finished. {done}/{len(STATE['rows'])} succeeded.")
+            # always write the final, complete files
+            try:
+                path = save_results(self.run_stamp)
+                if path:
+                    _log(f"Saved results to: {path}")
+            except Exception as e:
+                _log(f"(could not save results: {e})")
 
-    @staticmethod
-    def _finish_row(idx, result):
-        """Write a finished scrape result into STATE and log a one-liner."""
+    def _autosave(self, force=False):
+        """Write the run's files to results/ during a run, throttled so fast
+        parallel runs don't hammer the disk. Crash-safety: whatever finished so
+        far is always on disk."""
+        if not self.run_stamp:
+            return
+        now = time.time()
+        if not force and (now - self._last_autosave) < 3.0:
+            return
+        self._last_autosave = now
+        try:
+            save_results(self.run_stamp)
+        except Exception as e:
+            _log(f"(auto-save failed: {e})")
+
+    def _finish_row(self, idx, result):
+        """Write a finished scrape result into STATE, log a line, auto-save."""
         with LOCK:
             STATE["rows"][idx].update(
                 status=result["status"], record=result["record"],
@@ -164,6 +191,7 @@ class Worker:
             _log(f"  MISMATCH - {result['error']}")
         else:
             _log(f"  {result['status'].upper()} - {result['error']}")
+        self._autosave()
 
     async def _run_sequential(self, options):
         total = len(STATE["rows"])
@@ -286,6 +314,11 @@ COMPANY_COLUMNS = [
 ]
 
 
+PEOPLE_COLUMNS = ["company", "company_domain", "name", "title", "crunchbase_url",
+                  "linkedin", "twitter", "facebook", "website", "email",
+                  "current_title", "current_organization"]
+
+
 def company_rows():
     """Flatten STATE rows into CSV-ready company dicts."""
     out = []
@@ -300,6 +333,69 @@ def company_rows():
         flat["error"] = row["error"]
         out.append(flat)
     return out
+
+
+# --- result builders (shared by the download routes AND the auto-save) -------
+
+def build_company_csv():
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=COMPANY_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    for row in company_rows():
+        writer.writerow(row)
+    return buf.getvalue()
+
+
+def build_people_csv():
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=PEOPLE_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    with LOCK:
+        rows = list(STATE["rows"])
+    for row in rows:
+        rec = row.get("record") or {}
+        for person in rec.get("key_people") or []:
+            entry = dict(person)
+            entry["company"] = rec.get("name")
+            entry["company_domain"] = rec.get("input_domain") or row["domain"]
+            writer.writerow(entry)
+    return buf.getvalue()
+
+
+def build_results_json():
+    with LOCK:
+        records = [r["record"] for r in STATE["rows"] if r["record"]]
+    return json.dumps(records, indent=2, ensure_ascii=False)
+
+
+def results_dir():
+    """A persistent 'results' folder next to the app/exe (survives crashes)."""
+    import cb_scraper
+    d = os.path.join(cb_scraper._app_dir(), "results")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def save_results(stamp):
+    """Write companies/people CSV + JSON for the current run to results/.
+    Files are named with the run timestamp so each run is kept separately.
+    Returns the companies-CSV path (or None if there's nothing to save yet)."""
+    with LOCK:
+        has_data = any(r.get("record") for r in STATE["rows"])
+    if not has_data:
+        return None
+    d = results_dir()
+    companies = os.path.join(d, f"companies_{stamp}.csv")
+    # utf-8-sig so Excel opens accented characters correctly
+    with open(companies, "w", encoding="utf-8-sig", newline="") as f:
+        f.write(build_company_csv())
+    with open(os.path.join(d, f"people_{stamp}.csv"), "w",
+              encoding="utf-8-sig", newline="") as f:
+        f.write(build_people_csv())
+    with open(os.path.join(d, f"results_{stamp}.json"), "w",
+              encoding="utf-8") as f:
+        f.write(build_results_json())
+    return companies
 
 
 # --------------------------------------------------------------------------
@@ -385,10 +481,8 @@ def status():
 
 @app.route("/export.json")
 def export_json():
-    with LOCK:
-        records = [r["record"] for r in STATE["rows"] if r["record"]]
     return Response(
-        json.dumps(records, indent=2, ensure_ascii=False),
+        build_results_json(),
         mimetype="application/json",
         headers={"Content-Disposition": "attachment; filename=crunchbase.json"},
     )
@@ -396,36 +490,16 @@ def export_json():
 
 @app.route("/export.csv")
 def export_csv():
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=COMPANY_COLUMNS, extrasaction="ignore")
-    writer.writeheader()
-    for row in company_rows():
-        writer.writerow(row)
     return Response(
-        buf.getvalue(), mimetype="text/csv",
+        build_company_csv(), mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=crunchbase_companies.csv"},
     )
 
 
 @app.route("/export_people.csv")
 def export_people_csv():
-    cols = ["company", "company_domain", "name", "title", "crunchbase_url",
-            "linkedin", "twitter", "facebook", "website", "email",
-            "current_title", "current_organization"]
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
-    writer.writeheader()
-    with LOCK:
-        rows = list(STATE["rows"])
-    for row in rows:
-        rec = row.get("record") or {}
-        for person in rec.get("key_people") or []:
-            entry = dict(person)
-            entry["company"] = rec.get("name")
-            entry["company_domain"] = rec.get("input_domain") or row["domain"]
-            writer.writerow(entry)
     return Response(
-        buf.getvalue(), mimetype="text/csv",
+        build_people_csv(), mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=crunchbase_people.csv"},
     )
 

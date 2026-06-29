@@ -23,6 +23,7 @@ env/
 # --- scraper output / exports ---
 data/*
 !data/.gitkeep
+results/
 *.csv
 *.json
 crunchbase*.csv
