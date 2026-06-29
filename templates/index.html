@@ -58,99 +58,128 @@
        color:var(--mut); margin:22px 0 8px; }
   a { color:var(--acc); }
   .hint { font-size:11px; color:var(--mut); margin-top:6px; }
+  /* --- simplified UI helpers --- */
+  .fld { width:100%; background:var(--panel); border:1px solid var(--line);
+         color:var(--txt); border-radius:8px; padding:10px; margin-top:6px;
+         font:13px ui-monospace,Consolas,monospace; }
+  .tip { display:inline-flex; align-items:center; justify-content:center;
+         width:16px; height:16px; margin-left:6px; border-radius:50%;
+         background:var(--line); color:var(--mut); font:italic 11px serif;
+         cursor:help; position:relative; vertical-align:middle; }
+  .tip:hover::after { content:attr(data-tip); position:absolute; left:22px;
+         top:50%; transform:translateY(-50%); width:230px; background:#0a0c10;
+         border:1px solid var(--line); color:var(--txt); padding:9px 11px;
+         border-radius:8px; font:normal 12px/1.45 -apple-system,Segoe UI,sans-serif;
+         text-transform:none; letter-spacing:0; z-index:20;
+         box-shadow:0 6px 20px rgba(0,0,0,.55); }
+  .card { background:var(--panel); border:1px solid var(--line);
+          border-radius:10px; padding:12px 12px 14px; margin-top:14px; }
+  button.big { width:100%; padding:13px; font-size:15px; }
+  details.adv { margin-top:18px; border-top:1px solid var(--line); }
+  details.adv > summary { cursor:pointer; color:var(--mut); font-size:12px;
+          text-transform:uppercase; letter-spacing:.04em; padding:12px 0 4px;
+          list-style:none; }
+  details.adv > summary::-webkit-details-marker { display:none; }
+  details.adv > summary::before { content:"\25B8\00a0\00a0"; }
+  details.adv[open] > summary::before { content:"\25BE\00a0\00a0"; }
 </style>
 </head>
 <body>
 <header>
   <h1>Crunchbase Scraper</h1>
-  <span>domains &rarr; company profile, scores, funding, news &amp; key people &middot; phase 2 (login)</span>
+  <span>Turn a list of company websites into a spreadsheet of company info.</span>
 </header>
 
 <div class="wrap">
   <!-- ---------------- input panel ---------------- -->
   <div class="side">
     <form id="form">
-      <label>Domains (one per line, or comma separated)</label>
+      <label>Company websites
+        <span class="tip" data-tip="Paste the company website addresses you want info on - one per line (or separated by commas). Example: openai.com">i</span>
+      </label>
       <textarea name="domains" id="domains"
-        placeholder="vivasoftltd.com&#10;openai.com&#10;wind.app"></textarea>
+        placeholder="openai.com&#10;anthropic.com&#10;wind.app"></textarea>
+      <div class="hint">One per line &mdash; or upload a list:
+        <input type="file" name="file" id="file" accept=".txt,.csv"
+               title="Upload a .txt or .csv list of company websites"></div>
 
-      <label>...or upload a .txt / .csv file</label>
-      <input type="file" name="file" id="file" accept=".txt,.csv">
-
-      <div class="row">
-        <input type="checkbox" name="enrich" id="enrich">
-        <label for="enrich">Visit each key person's page for socials/email (slower)</label>
-      </div>
-      <div class="row">
-        <label for="max_people" style="white-space:nowrap">Max people per company</label>
-        <input type="number" name="max_people" id="max_people" value="5"
-               min="1" max="25" style="width:70px">
-      </div>
-      <div class="row">
-        <label for="concurrency" style="white-space:nowrap">Parallel browsers (1&ndash;6)</label>
-        <input type="number" name="concurrency" id="concurrency" value="1"
-               min="1" max="6" style="width:70px">
-      </div>
-      <div class="hint">Runs this many Chrome windows at once for faster bulk
-        runs (each is a separate browser &mdash; that's what actually runs in
-        parallel). 1 = safe sequential mode. Higher = faster but more RAM and
-        more likely to trip Cloudflare; 3&ndash;4 is a good balance. Each window
-        logs in on its own the first time. (Forced to 1 in Diagnostic mode.)</div>
-
-      <label>Proxy (optional &mdash; recommended for large runs)</label>
-      <input type="text" name="proxy" id="proxy" style="width:100%;
-        background:var(--panel);border:1px solid var(--line);color:var(--txt);
-        border-radius:8px;padding:9px;font:13px ui-monospace,Consolas,monospace"
-        placeholder="host:port  or  http://user:pass@host:port">
-      <div class="hint">Crunchbase rate-limits by IP. A rotating proxy keeps
-        large runs from getting blocked.</div>
-
-      <h3>Phase 2 &middot; logged-in session</h3>
-      <div class="row">
-        <input type="checkbox" name="login" id="login">
-        <label for="login">Use a logged-in session (unlocks funding total)</label>
-      </div>
-      <label for="email">Account email (optional &mdash; for auto-login)</label>
-      <input type="text" name="email" id="email" autocomplete="off"
-        style="width:100%;background:var(--panel);border:1px solid var(--line);
-        color:var(--txt);border-radius:8px;padding:9px;
-        font:13px ui-monospace,Consolas,monospace" placeholder="you@example.com">
-      <label for="password">Account password (optional)</label>
-      <input type="password" name="password" id="password" autocomplete="off"
-        style="width:100%;background:var(--panel);border:1px solid var(--line);
-        color:var(--txt);border-radius:8px;padding:9px;
-        font:13px ui-monospace,Consolas,monospace" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;">
-      <div class="hint">With email + password filled, login runs
-        <b>automatically</b> when you press Start (no button needed). Leave them
-        blank to sign in by hand once &mdash; the session then persists.
-        Credentials are sent only to this local app.</div>
-      <div class="row">
-        <input type="checkbox" name="diagnostic" id="diagnostic">
-        <label for="diagnostic">Diagnostic mode (dump requests + funding fields to <code>data/</code>)</label>
-      </div>
-      <div class="btns">
-        <button type="button" class="ghost" id="loginBtn">Log in now</button>
+      <div class="card">
+        <div class="row">
+          <input type="checkbox" name="login" id="login">
+          <label for="login">Log in to get funding totals
+            <span class="tip" data-tip="Funding totals are only shown to logged-in Crunchbase users. Tick this and enter the account below - it signs in for you automatically. Left off, funding shows as 'login required'.">i</span>
+          </label>
+        </div>
+        <input type="text" name="email" id="email" class="fld" autocomplete="off"
+               placeholder="account email">
+        <input type="password" name="password" id="password" class="fld"
+               autocomplete="off" placeholder="account password">
       </div>
 
-      <div class="btns">
-        <button type="submit" id="startBtn">Start scraping</button>
+      <div class="btns" style="margin-top:16px">
+        <button type="submit" id="startBtn" class="big">Start</button>
+      </div>
+      <div class="btns" style="margin-top:8px">
         <button type="button" class="ghost" id="stopBtn" disabled>Stop</button>
       </div>
-      <div class="hint">A Chrome window opens and clears Cloudflare automatically.
-        Keep it running; don't close it manually.</div>
+      <div class="hint">A Chrome window opens and does the work by itself &mdash;
+        just leave it open until it finishes.</div>
+
+      <details class="adv">
+        <summary>Advanced options</summary>
+
+        <div class="row" style="margin-top:8px">
+          <label for="concurrency" style="white-space:nowrap">Speed (windows at once)</label>
+          <input type="number" name="concurrency" id="concurrency" value="1"
+                 min="1" max="6" style="width:60px">
+          <span class="tip" data-tip="Open several Chrome windows at once to get through a big list faster. 1 = normal. 3 or 4 = faster but uses more memory. Leave at 1 if unsure.">i</span>
+        </div>
+
+        <div class="row">
+          <label for="max_people" style="white-space:nowrap">People per company</label>
+          <input type="number" name="max_people" id="max_people" value="5"
+                 min="1" max="25" style="width:60px">
+          <span class="tip" data-tip="How many key people (founders, executives) to list for each company.">i</span>
+        </div>
+
+        <div class="row">
+          <input type="checkbox" name="enrich" id="enrich">
+          <label for="enrich">Also get each person's socials &amp; email
+            <span class="tip" data-tip="Opens each person's own page to pull LinkedIn / Twitter / email. More detail, but noticeably slower.">i</span>
+          </label>
+        </div>
+
+        <label for="proxy">Proxy
+          <span class="tip" data-tip="Optional. Routes traffic through another IP so very large runs are less likely to get blocked. Leave blank if you don't have one.">i</span>
+        </label>
+        <input type="text" name="proxy" id="proxy" class="fld"
+               placeholder="host:port">
+
+        <div class="row" style="margin-top:12px">
+          <input type="checkbox" name="diagnostic" id="diagnostic">
+          <label for="diagnostic">Diagnostic mode
+            <span class="tip" data-tip="For troubleshooting only - saves technical details to the data folder and forces 1 window. Leave this off.">i</span>
+          </label>
+        </div>
+
+        <div class="btns" style="margin-top:14px">
+          <button type="button" class="ghost" id="loginBtn">Log in manually</button>
+          <span class="tip" data-tip="Only needed if automatic login fails - opens the Chrome window so you can sign in by hand. The session is then remembered.">i</span>
+        </div>
+      </details>
     </form>
 
-    <h3>Export</h3>
+    <h3>Download results</h3>
     <div class="btns">
-      <a href="/export.csv"><button type="button" class="ghost">Companies CSV</button></a>
-      <a href="/export_people.csv"><button type="button" class="ghost">People CSV</button></a>
+      <a href="/export.csv"><button type="button" class="ghost">Companies (Excel)</button></a>
+      <a href="/export_people.csv"><button type="button" class="ghost">People (Excel)</button></a>
       <a href="/export.json"><button type="button" class="ghost">JSON</button></a>
     </div>
   </div>
 
   <!-- ---------------- progress panel ---------------- -->
   <div class="main">
-    <div class="stats" id="stats"><span>Idle. Paste domains and press Start.</span></div>
+    <div class="stats" id="stats"><span>Paste company websites on the left, then press Start.</span></div>
     <div class="bar"><i id="barFill"></i></div>
 
     <table>
