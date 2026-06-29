@@ -65,7 +65,17 @@
   .tip { display:inline-flex; align-items:center; justify-content:center;
          width:16px; height:16px; margin-left:6px; border-radius:50%;
          background:var(--line); color:var(--mut); font:italic 11px serif;
-         cursor:help; vertical-align:middle; }
+         cursor:help; vertical-align:middle; transition:background .15s,color .15s; }
+  .tip:hover { background:var(--acc); color:#fff; }
+  /* JS-positioned tooltip lives on <body>, so the sidebar can't clip it */
+  #tooltip { position:fixed; z-index:1000; max-width:250px; pointer-events:none;
+             background:linear-gradient(180deg,#12151c,#0a0c10);
+             border:1px solid var(--acc); color:var(--txt);
+             padding:10px 13px; border-radius:10px;
+             font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;
+             box-shadow:0 10px 30px rgba(0,0,0,.6); opacity:0; visibility:hidden;
+             transform:translateY(4px); transition:opacity .12s, transform .12s; }
+  #tooltip.show { opacity:1; visibility:visible; transform:translateY(0); }
   .card { background:var(--panel); border:1px solid var(--line);
           border-radius:10px; padding:12px 12px 14px; margin-top:14px; }
   button.big { width:100%; padding:13px; font-size:15px; }
@@ -89,7 +99,7 @@
   <div class="side">
     <form id="form">
       <label>Company websites
-        <span class="tip" title="Paste the company website addresses you want info on - one per line (or separated by commas). Example: openai.com">i</span>
+        <span class="tip" data-tip="Paste the company website addresses you want info on - one per line (or separated by commas). Example: openai.com">i</span>
       </label>
       <textarea name="domains" id="domains"
         placeholder="openai.com&#10;anthropic.com&#10;wind.app"></textarea>
@@ -101,7 +111,7 @@
         <div class="row">
           <input type="checkbox" name="login" id="login">
           <label for="login">Log in to get funding totals
-            <span class="tip" title="Funding totals are only shown to logged-in Crunchbase users. Tick this and enter the account below - it signs in for you automatically. Left off, funding shows as 'login required'.">i</span>
+            <span class="tip" data-tip="Funding totals are only shown to logged-in Crunchbase users. Tick this and enter the account below - it signs in for you automatically. Left off, funding shows as 'login required'.">i</span>
           </label>
         </div>
         <input type="text" name="email" id="email" class="fld" autocomplete="off"
@@ -126,25 +136,25 @@
           <label for="concurrency" style="white-space:nowrap">Speed (windows at once)</label>
           <input type="number" name="concurrency" id="concurrency" value="1"
                  min="1" max="6" style="width:60px">
-          <span class="tip" title="Open several Chrome windows at once to get through a big list faster. 1 = normal. 3 or 4 = faster but uses more memory. Leave at 1 if unsure.">i</span>
+          <span class="tip" data-tip="Open several Chrome windows at once to get through a big list faster. 1 = normal. 3 or 4 = faster but uses more memory. Leave at 1 if unsure.">i</span>
         </div>
 
         <div class="row">
           <label for="max_people" style="white-space:nowrap">People per company</label>
           <input type="number" name="max_people" id="max_people" value="5"
                  min="1" max="25" style="width:60px">
-          <span class="tip" title="How many key people (founders, executives) to list for each company.">i</span>
+          <span class="tip" data-tip="How many key people (founders, executives) to list for each company.">i</span>
         </div>
 
         <div class="row">
           <input type="checkbox" name="enrich" id="enrich">
           <label for="enrich">Also get each person's socials &amp; email
-            <span class="tip" title="Opens each person's own page to pull LinkedIn / Twitter / email. More detail, but noticeably slower.">i</span>
+            <span class="tip" data-tip="Opens each person's own page to pull LinkedIn / Twitter / email. More detail, but noticeably slower.">i</span>
           </label>
         </div>
 
         <label for="proxy">Proxy
-          <span class="tip" title="Optional. Routes traffic through another IP so very large runs are less likely to get blocked. Leave blank if you don't have one.">i</span>
+          <span class="tip" data-tip="Optional. Routes traffic through another IP so very large runs are less likely to get blocked. Leave blank if you don't have one.">i</span>
         </label>
         <input type="text" name="proxy" id="proxy" class="fld"
                placeholder="host:port">
@@ -152,13 +162,13 @@
         <div class="row" style="margin-top:12px">
           <input type="checkbox" name="diagnostic" id="diagnostic">
           <label for="diagnostic">Diagnostic mode
-            <span class="tip" title="For troubleshooting only - saves technical details to the data folder and forces 1 window. Leave this off.">i</span>
+            <span class="tip" data-tip="For troubleshooting only - saves technical details to the data folder and forces 1 window. Leave this off.">i</span>
           </label>
         </div>
 
         <div class="btns" style="margin-top:14px">
           <button type="button" class="ghost" id="loginBtn">Log in manually</button>
-          <span class="tip" title="Only needed if automatic login fails - opens the Chrome window so you can sign in by hand. The session is then remembered.">i</span>
+          <span class="tip" data-tip="Only needed if automatic login fails - opens the Chrome window so you can sign in by hand. The session is then remembered.">i</span>
         </div>
       </details>
     </form>
@@ -193,6 +203,37 @@
 
 <script>
 const $ = id => document.getElementById(id);
+
+// --- styled hover tooltips (rendered on <body> so the scrollable sidebar
+//     can't clip them; auto-flips to stay on screen) ---
+const tipEl = document.createElement("div");
+tipEl.id = "tooltip";
+document.body.appendChild(tipEl);
+function showTip(e){
+  const el = e.currentTarget, txt = el.getAttribute("data-tip");
+  if (!txt) return;
+  tipEl.textContent = txt;
+  tipEl.classList.add("show");
+  const r = el.getBoundingClientRect();
+  const tw = tipEl.offsetWidth, th = tipEl.offsetHeight, gap = 10;
+  let x = r.right + gap;                       // prefer right of the icon
+  if (x + tw > window.innerWidth - 8) x = r.left - tw - gap;   // flip to left
+  x = Math.max(8, x);
+  let y = r.top + r.height/2 - th/2;           // vertically centred on icon
+  y = Math.min(Math.max(8, y), window.innerHeight - th - 8);
+  tipEl.style.left = x + "px";
+  tipEl.style.top  = y + "px";
+}
+function hideTip(){ tipEl.classList.remove("show"); }
+function bindTips(){
+  document.querySelectorAll(".tip").forEach(el=>{
+    el.removeEventListener("mouseenter", showTip);
+    el.removeEventListener("mouseleave", hideTip);
+    el.addEventListener("mouseenter", showTip);
+    el.addEventListener("mouseleave", hideTip);
+  });
+}
+bindTips();
 
 // --- remember every setting except the domain list (in this browser) ---
 const SETTINGS = {
