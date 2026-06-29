@@ -170,16 +170,33 @@ def _money(node):
             amt, cur = usd, "USD"
         else:
             amt, cur = node.get("value"), node.get("currency") or ""
-        if amt is None:
-            return None
-        try:
-            amt_s = f"{float(amt):,.0f}"
-        except (TypeError, ValueError):
-            return str(amt)
-        return f"${amt_s}" if cur in ("USD", "") else f"{cur} {amt_s}"
-    if isinstance(node, (int, float)):
-        return f"${node:,.0f}"
-    return str(node)
+    elif isinstance(node, (int, float)):
+        amt, cur = node, "USD"
+    else:
+        return str(node)
+    if amt is None:
+        return None
+    try:
+        amt_s = f"{float(amt):,.0f}"
+    except (TypeError, ValueError):
+        return str(amt)
+    full = f"${amt_s}" if cur in ("USD", "") else f"{cur} {amt_s}"
+    short = _abbrev_num(amt)                       # e.g. 128.7B / 4.2M
+    return f"{full} ({short})" if short else full
+
+
+def _abbrev_num(amt):
+    """Compact form of a number: '128.7B', '4.2M'. None below a million."""
+    try:
+        a = float(amt)
+    except (TypeError, ValueError):
+        return None
+    n = abs(a)
+    if n >= 1e9:
+        return f"{a / 1e9:.1f}B"
+    if n >= 1e6:
+        return f"{a / 1e6:.1f}M"
+    return None
 
 
 def funding_debug(html):

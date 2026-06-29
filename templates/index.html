@@ -192,10 +192,10 @@
     <table>
       <thead><tr>
         <th>#</th><th>Domain</th><th>Status</th><th>Company</th>
-        <th>Address</th><th>Growth</th><th>Funding</th><th>News</th><th>People</th>
+        <th>Address</th><th>Growth</th><th>Funding</th><th>Acquired</th><th>News</th><th>People</th>
       </tr></thead>
       <tbody id="tbody">
-        <tr><td colspan="9" style="color:var(--mut)">No run yet.</td></tr>
+        <tr><td colspan="10" style="color:var(--mut)">No run yet.</td></tr>
       </tbody>
     </table>
 
@@ -322,10 +322,11 @@ function render(d){
       <td>${esc(rec.location)}</td>
       <td>${esc(rec.growth_score)}</td>
       <td>${esc(rec.funding_total)}</td>
+      <td>${rec.name ? (rec.acquired ? ("Yes"+(rec.acquired_by?" — "+esc(rec.acquired_by):"")) : "No") : ""}</td>
       <td>${esc(rec.news_available)}</td>
       <td>${rec.key_people?rec.key_people.length:""}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="9" style="color:var(--mut)">No run yet.</td></tr>`;
+  }).join("") || `<tr><td colspan="10" style="color:var(--mut)">No run yet.</td></tr>`;
 
   const log = $("log");
   log.textContent = (d.log||[]).join("\n");
